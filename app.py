@@ -227,6 +227,9 @@ def get_data():
     LIMIT 20000
     """
     df = fetch_data(dataset_identifier, query)
+    # Ensure data directory exists
+    if not os.path.exists(data_directory):
+        os.makedirs(data_directory)
     most_recent_prior_file = get_most_recent_file(data_directory)
     if most_recent_prior_file:
         prior_df = pd.read_csv(os.path.join(data_directory, most_recent_prior_file))
