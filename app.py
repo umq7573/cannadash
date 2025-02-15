@@ -236,9 +236,9 @@ def get_data():
     most_recent_prior_file = get_most_recent_file(data_directory)
     if most_recent_prior_file:
         prior_df = pd.read_csv(os.path.join(data_directory, most_recent_prior_file))
-        df = apply_geocoding(df, prior_df)
+        df = apply_geocoding(df, prior_df=prior_df)  # Fix parameter name
     else:
-        df = apply_geocoding(df)
+        df = apply_geocoding(df, prior_df=None)  # Be explicit about prior_df being None
     df['violation_date'] = pd.to_datetime(df['violation_date'], errors='coerce')
     gdf = add_districts(df, districts_geojson_path)
     return df, gdf
