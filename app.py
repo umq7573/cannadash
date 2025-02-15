@@ -14,6 +14,7 @@ import logging
 from sodapy import Socrata
 from shapely.geometry import Point
 from datetime import datetime
+import json
 # --------------------------
 # Configuration Variables
 # --------------------------
@@ -49,8 +50,8 @@ def geocode_address(address):
         return location['lat'], location['lng']
     else:
         return None, None
-
-def apply_geocoding(df, api_key, prior_df=None):  # This parameter should be removed
+    
+def apply_geocoding(df, prior_df=None):
     api_geocode_count = 0
     prior_file_geocode_count = 0
 
@@ -62,7 +63,8 @@ def apply_geocoding(df, api_key, prior_df=None):  # This parameter should be rem
                 prior_file_geocode_count += 1
                 return prior_address.iloc[0]['latitude'], prior_address.iloc[0]['longitude']
         api_geocode_count += 1
-        return geocode_address(address)  # Remove api_key parameter here
+        return geocode_address(address)
+
 
 
     df['full_address'] = df.apply(
@@ -192,6 +194,9 @@ def generate_heatmap(df, districts_geojson_path):
     violation_counts = df.groupby('district_number').size().reset_index(name='violation_count')
     # Load districts geojson
     gdf_districts = gpd.read_file(districts_geojson_path)
+    gdf_districts['district_number'] = pd.to_numeric(gdf_districts['CounDist'], errors='coerce').astype(int).astype(str)
+    violation_counts['district_number'] = pd.to_numeric(violation_counts['district_number'], errors='coerce').astype(int).astype(str)
+
     gdf_districts['district_number'] = gdf_districts['CounDist'].astype(str)
     violation_counts['district_number'] = violation_counts['district_number'].astype(str)
     merged = gdf_districts.merge(violation_counts, on='district_number', how='left')
@@ -199,17 +204,18 @@ def generate_heatmap(df, districts_geojson_path):
     max_count = merged['violation_count'].max() if merged['violation_count'].max() > 0 else 1
 
     # Create a Pydeck GeoJsonLayer using a fill color expression based on violation_count
-    geojson = merged.to_json()
+    geojson_data = json.loads(merged.to_json())
     layer = pdk.Layer(
         "GeoJsonLayer",
-        data=geojson,
+        data=geojson_data,
         opacity=0.8,
         stroked=True,
         filled=True,
-        get_fill_color=f"[255, 255 - (255 * properties.violation_count / {max_count}), 0, 150]",
+        get_fill_color=f"[255, 255 - (255 * properties.violation_count / {max_count}), 0, 150]",  # constant red color
         get_line_color=[0, 0, 0],
         pickable=True,
     )
+
     view_state = pdk.ViewState(latitude=40.7128, longitude=-74.0060, zoom=9, pitch=0)
     deck = pdk.Deck(
         layers=[layer],
