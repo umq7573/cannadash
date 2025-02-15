@@ -37,6 +37,8 @@ def fetch_data(dataset_identifier, query):
     results = client.get(dataset_identifier, query=query)
     return pd.DataFrame.from_records(results)
 
+
+
 def geocode_address(address):
     base_url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {"address": address, "key": st.secrets["api_key"]}
@@ -48,7 +50,7 @@ def geocode_address(address):
     else:
         return None, None
 
-def apply_geocoding(df, api_key, prior_df=None):
+def apply_geocoding(df, api_key, prior_df=None):  # This parameter should be removed
     api_geocode_count = 0
     prior_file_geocode_count = 0
 
@@ -60,7 +62,8 @@ def apply_geocoding(df, api_key, prior_df=None):
                 prior_file_geocode_count += 1
                 return prior_address.iloc[0]['latitude'], prior_address.iloc[0]['longitude']
         api_geocode_count += 1
-        return geocode_address(address, api_key)
+        return geocode_address(address)  # Remove api_key parameter here
+
 
     df['full_address'] = df.apply(
         lambda row: f"{row['violation_location_house']} {row['violation_location_street_name']}, {row['violation_location_city']}, {row['violation_location_state_name']} {row['violation_location_zip_code']}", 
