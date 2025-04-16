@@ -133,15 +133,38 @@ def generate_main_summary(df):
 
     unique_shops = (df['violation_location_house'] + ", " + df['violation_location_street_name'] + ", " + df['violation_location_city']).nunique()
 
+    # Helper function for currency formatting
+    def format_currency(value):
+        if value == int(value): # Check if it's a whole number
+            return f"{int(value):,}" # Format as integer with commas
+        else:
+            return f"{value:,.2f}" # Format as float with commas and 2 decimals
+
+    # Format numbers with commas
+    total_issuances_f = f"{total_issuances:,}"
+    unique_shops_f = f"{unique_shops:,}"
+    pending_adjudication_f = f"{total_issuances - completed_cases_count - defaulted_cases_count:,}"
+    adjudicated_count_f = f"{completed_cases_count + defaulted_cases_count:,}"
+    completed_violation_count_f = f"{completed_violation_count:,}"
+    completed_cases_penalty_f = format_currency(completed_cases_penalty)
+    completed_violation_penalty_due_count_f = f"{completed_violation_penalty_due_count:,}"
+    completed_violation_penalty_due_sum_f = format_currency(completed_violation_penalty_due_sum)
+    completed_violation_all_terms_met_count_f = f"{completed_violation_all_terms_met_count:,}"
+    completed_violation_all_terms_met_sum_f = format_currency(completed_violation_all_terms_met_sum)
+    completed_dismissed_count_f = f"{completed_dismissed_count:,}"
+    completed_dismissed_sum_f = format_currency(completed_dismissed_sum)
+    defaulted_cases_count_f = f"{defaulted_cases_count:,}"
+    defaulted_cases_penalty_f = format_currency(defaulted_cases_penalty)
+
     status_of_violations = (
-        f"**As of {as_of_today}, there have been {total_issuances} total violations issued across {unique_shops} unique shops.**  \n\n"
-        f"- {total_issuances - completed_cases_count - defaulted_cases_count} violations are currently pending adjudication.\n"
-        f"- Of the {completed_cases_count + defaulted_cases_count} violations adjudicated:\n"
-        f"  - {completed_violation_count} were found to be in violation (total penalties: ${completed_cases_penalty}):\n"
-        f"    - Penalties remain unpaid for {completed_violation_penalty_due_count} violations (total: ${completed_violation_penalty_due_sum}).\n"
-        f"    - Penalties were paid in {completed_violation_all_terms_met_count} cases (total: ${completed_violation_all_terms_met_sum}).\n"
-        f"  - {completed_dismissed_count} violations were dismissed (total: ${completed_dismissed_sum}).\n"
-        f"  - {defaulted_cases_count} violations resulted in default judgments (total: ${defaulted_cases_penalty}).\n"
+        f"**As of {as_of_today}, there have been {total_issuances_f} total violations issued across {unique_shops_f} unique shops.**  \n\n"
+        f"- {pending_adjudication_f} violations are currently pending adjudication.\n"
+        f"- Of the {adjudicated_count_f} violations adjudicated:\n"
+        f"  - {completed_violation_count_f} were found to be in violation (total penalties: ${completed_cases_penalty_f}):\n"
+        f"    - Penalties remain unpaid for {completed_violation_penalty_due_count_f} violations (total: ${completed_violation_penalty_due_sum_f}).\n"
+        f"    - Penalties were paid in {completed_violation_all_terms_met_count_f} cases (total: ${completed_violation_all_terms_met_sum_f}).\n"
+        f"  - {completed_dismissed_count_f} violations were dismissed (total: ${completed_dismissed_sum_f}).\n"
+        f"  - {defaulted_cases_count_f} violations resulted in default judgments (total: ${defaulted_cases_penalty_f}).\n"
     )
     return status_of_violations
 
@@ -182,7 +205,7 @@ def plot_biweekly_chart(df):
         ax.bar_label(container, fmt='%.0f%%', label_type='center')
     total_violations = biweekly_status.sum(axis=1)
     for i, total in enumerate(total_violations):
-        ax.text(i, 100, f'{total} violations', ha='center', va='bottom')
+        ax.text(i, 100, f'{total}\nTotal', ha='center', va='bottom')
     ax.set_ylim(0, 110)
     plt.tight_layout()
     return fig
@@ -227,8 +250,9 @@ def generate_heatmap(df, districts_geojson_path):
 # --------------------------
 # Data Loading (with caching)
 # --------------------------
-@st.cache_data(ttl=3600)
-def get_data():
+@st.cache_data(ttl=43200) # Set TTL to 12 hours (43200 seconds)
+def get_data(refresh_trigger=0): # Add dummy argument for cache invalidation
+    logging.info(f"Fetching data (refresh trigger: {refresh_trigger})...") # Log fetch attempt
     query = """
     SELECT *
     WHERE issuing_agency = 'NYC SHERIFF'
@@ -236,6 +260,19 @@ def get_data():
     LIMIT 20000
     """
     df = fetch_data(dataset_identifier, query)
+
+    # Filter based on charge code or description
+    # Ensure columns exist and handle potential missing values
+    if 'charge_1_code' in df.columns and 'charge_1_code_description' in df.columns:
+        df['charge_1_code_description'] = df['charge_1_code_description'].astype(str) # Ensure string type for contains check
+        condition1 = df['charge_1_code'].isin(['ABE1', 'ABE2'])
+        condition2 = df['charge_1_code_description'].str.contains('CANN', case=False, na=False)
+        df = df[condition1 | condition2]
+    else:
+        logging.warning("Columns 'charge_1_code' or 'charge_1_code_description' not found in the fetched data. Skipping filtering.")
+        # Optionally, return an empty DataFrame or raise an error if these columns are critical
+        # return pd.DataFrame(), pd.DataFrame() # Example: return empty dataframes
+
     # Ensure data directory exists
     if not os.path.exists(data_directory):
         os.makedirs(data_directory)
@@ -255,8 +292,17 @@ def get_data():
 def main():
     st.title("Cannabis Case Violations Dashboard")
 
-    # Load data (cached)
-    df, gdf = get_data()
+    # Initialize session state for refresh counter if it doesn't exist
+    if 'refresh_counter' not in st.session_state:
+        st.session_state.refresh_counter = 0
+
+    # Add refresh button to sidebar
+    if st.sidebar.button("Refresh Data", help="Click to fetch the latest data. Use sparingly to avoid excessive API calls."):
+        st.session_state.refresh_counter += 1
+        st.cache_data.clear() # Clear the cache explicitly
+
+    # Load data (cached), passing the refresh trigger
+    df, gdf = get_data(refresh_trigger=st.session_state.refresh_counter)
 
     # District Picker in Sidebar
     unique_districts = sorted(gdf['district_number'].dropna().unique())
@@ -267,6 +313,15 @@ def main():
         filtered_gdf = gdf[gdf['district_number'].isin(selected_districts)]
     else:
         filtered_gdf = gdf
+
+    # Add Download Button
+    csv = filtered_gdf.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Data as CSV",
+        data=csv,
+        file_name=f'filtered_cannabis_violations_{datetime.today().strftime("%Y-%m-%d")}.csv',
+        mime='text/csv',
+    )
 
     # Display Summary
     st.subheader("Summary")
