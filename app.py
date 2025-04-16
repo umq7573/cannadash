@@ -212,18 +212,43 @@ def plot_biweekly_chart(df):
 
 def generate_heatmap(df, districts_geojson_path):
     if df.empty:
+        st.write("No data available for heatmap generation.") # More specific message
         return None
-    # Compute violation counts by district
-    violation_counts = df.groupby('district_number').size().reset_index(name='violation_count')
-    # Load districts geojson
-    gdf_districts = gpd.read_file(districts_geojson_path)
-    gdf_districts['district_number'] = pd.to_numeric(gdf_districts['CounDist'], errors='coerce').astype(int).astype(str)
-    violation_counts['district_number'] = pd.to_numeric(violation_counts['district_number'], errors='coerce').astype(int).astype(str)
 
-    gdf_districts['district_number'] = gdf_districts['CounDist'].astype(str)
-    violation_counts['district_number'] = violation_counts['district_number'].astype(str)
-    merged = gdf_districts.merge(violation_counts, on='district_number', how='left')
-    merged['violation_count'] = merged['violation_count'].fillna(0)
+    # Ensure 'district_number' exists and handle potential NaNs from sjoin
+    if 'district_number' not in df.columns:
+        st.error("'district_number' column not found after spatial join.")
+        return None
+    
+    # Compute violation counts by district (handle potential NaN district numbers)
+    # Convert district_number to string *before* grouping to treat numeric and string districts consistently
+    # Also handle cases where district_number might be NaN after sjoin
+    df['district_number_str'] = df['district_number'].astype(str).replace('<NA>', 'N/A').fillna('N/A')
+    violation_counts = df.groupby('district_number_str').size().reset_index(name='violation_count')
+
+    # Load districts geojson
+    try:
+        gdf_districts = gpd.read_file(districts_geojson_path)
+    except Exception as e:
+        st.error(f"Error loading districts GeoJSON: {e}")
+        return None
+
+    if 'CounDist' not in gdf_districts.columns:
+        st.error("'CounDist' column not found in GeoJSON file.")
+        return None
+
+    # Standardize the merge key to string type in both dataframes
+    gdf_districts['district_number_str'] = gdf_districts['CounDist'].astype(str)
+    # violation_counts['district_number_str'] is already created above
+    
+    # Perform the merge
+    merged = gdf_districts.merge(violation_counts, on='district_number_str', how='left')
+    merged['violation_count'] = merged['violation_count'].fillna(0) # Fill districts with no violations
+
+    if merged.empty:
+        st.write("No data to display on heatmap after merging.")
+        return None
+        
     max_count = merged['violation_count'].max() if merged['violation_count'].max() > 0 else 1
 
     # Create a Pydeck GeoJsonLayer using a fill color expression based on violation_count
@@ -234,7 +259,7 @@ def generate_heatmap(df, districts_geojson_path):
         opacity=0.8,
         stroked=True,
         filled=True,
-        get_fill_color=f"[255, 255 - (255 * properties.violation_count / {max_count}), 0, 150]",  # constant red color
+        get_fill_color=f"[255, 255 - (255 * properties.violation_count / {max_count}), 0, 150]", # Red intensity based on count
         get_line_color=[0, 0, 0],
         pickable=True,
     )
@@ -243,7 +268,7 @@ def generate_heatmap(df, districts_geojson_path):
     deck = pdk.Deck(
         layers=[layer],
         initial_view_state=view_state,
-        tooltip={"text": "District: {district_number}\nViolations: {violation_count}"}
+        tooltip={"text": "District: {district_number_str}\nViolations: {violation_count}"} # Use the standardized key for tooltip
     )
     return deck
 
@@ -295,6 +320,7 @@ def main():
     # Initialize session state for refresh counter if it doesn't exist
     if 'refresh_counter' not in st.session_state:
         st.session_state.refresh_counter = 0
+    # Removed session state init for selected_districts
 
     # Add refresh button to sidebar
     if st.sidebar.button("Refresh Data", help="Click to fetch the latest data. Use sparingly to avoid excessive API calls."):
@@ -304,15 +330,23 @@ def main():
     # Load data (cached), passing the refresh trigger
     df, gdf = get_data(refresh_trigger=st.session_state.refresh_counter)
 
-    # District Picker in Sidebar
-    unique_districts = sorted(gdf['district_number'].dropna().unique())
-    selected_districts = st.sidebar.multiselect("Select District(s)", options=unique_districts, default=unique_districts)
-
+    # --- Original District Picker in Sidebar ---
+    unique_districts = sorted(gdf['district_number'].dropna().astype(str).unique()) # Ensure string type
+    
+    # Default multiselect without expander or explicit session state management for selection
+    selected_districts = st.sidebar.multiselect(
+        "Select District(s)", 
+        options=unique_districts, 
+        default=unique_districts # Default to all selected
+    )
+    
     # Filter data based on selected districts
     if selected_districts:
-        filtered_gdf = gdf[gdf['district_number'].isin(selected_districts)]
+        # Ensure district_number in gdf is also treated as string for comparison
+        filtered_gdf = gdf[gdf['district_number'].astype(str).isin(selected_districts)]
     else:
-        filtered_gdf = gdf
+        # If no districts selected, show empty data
+        filtered_gdf = gdf[gdf['district_number'].isna()] # Original behavior: Show empty
 
     # Add Download Button
     csv = filtered_gdf.to_csv(index=False).encode('utf-8')
